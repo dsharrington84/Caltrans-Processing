@@ -25,8 +25,7 @@ CHECK_STEPS: tuple[QualityStep, ...] = (
     ),
     QualityStep(
         name="Framework doctor",
-        module="scripts.subcontractor.operations",
-        arguments=("doctor",),
+        module="scripts.subcontractor.doctor",
     ),
 )
 
