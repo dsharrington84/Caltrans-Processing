@@ -26,3 +26,36 @@ data/reports/
 # OS
 .DS_Store
 Thumbs.db
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+env/
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+
+# DuckDB runtime files
+*.wal
+
+# Runtime data and generated outputs
+data/database/
+data/backups/
+logs/
+reports/
+backups/
+cache/
+
+# Generated repository diagnostics
+schema_inventory.txt
+
+# Temporary migration and editor files
+*.before_*
+*.bak
+*.tmp
+*.swp
+*~
