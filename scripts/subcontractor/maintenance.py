@@ -1,135 +1,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
-import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import duckdb
 
 from scripts.subcontractor.backup_service import (
-    create_database_backup,
     format_backup_result,
 )
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-CONFIG_PATH = (
-    PROJECT_ROOT
-    / "config/subcontractor/settings.json"
+from scripts.subcontractor.framework import (
+    FrameworkContext,
 )
-
-DEFAULT_DATABASE = (
-    PROJECT_ROOT
-    / "data/database/caltrans_pricing.duckdb"
-)
-
-DEFAULT_BACKUPS = (
-    PROJECT_ROOT
-    / "data/database/backups"
-)
-
-DEFAULT_LOGS = (
-    PROJECT_ROOT
-    / "data/logs/subcontractor"
-)
-
-DEFAULT_REPORTS = (
-    PROJECT_ROOT
-    / "data/reports/subcontractor"
-)
-
-
-def load_settings() -> dict[str, Any]:
-    if not CONFIG_PATH.exists():
-        return {}
-
-    with CONFIG_PATH.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
-        settings = json.load(file)
-
-    if not isinstance(settings, dict):
-        raise TypeError(
-            "Configuration must contain a JSON object."
-        )
-
-    return settings
-
-
-def resolve_path(
-    value: Any,
-    default: Path,
-) -> Path:
-    if value in {
-        None,
-        "",
-    }:
-        return default.resolve()
-
-    path = Path(
-        str(value)
-    ).expanduser()
-
-    if not path.is_absolute():
-        path = PROJECT_ROOT / path
-
-    return path.resolve()
-
-
-def configured_paths() -> dict[str, Path]:
-    settings = load_settings()
-
-    return {
-        "database": resolve_path(
-            settings.get(
-                "database_path"
-            ),
-            DEFAULT_DATABASE,
-        ),
-        "backups": resolve_path(
-            settings.get(
-                "backup_directory"
-            ),
-            DEFAULT_BACKUPS,
-        ),
-        "logs": resolve_path(
-            settings.get(
-                "log_directory"
-            ),
-            DEFAULT_LOGS,
-        ),
-        "reports": resolve_path(
-            settings.get(
-                "report_directory"
-            ),
-            DEFAULT_REPORTS,
-        ),
-    }
-
-
-def safe_slug(
-    value: str,
-) -> str:
-    cleaned = "".join(
-        character.lower()
-        if character.isalnum()
-        else "_"
-        for character in value.strip()
-    )
-
-    cleaned = "_".join(
-        part
-        for part in cleaned.split("_")
-        if part
-    )
-
-    return cleaned or "manual"
 
 
 def format_bytes(
@@ -155,88 +37,6 @@ def format_bytes(
     return f"{value:,} B"
 
 
-def checksum(
-    path: Path,
-) -> str:
-    digest = hashlib.sha256()
-
-    with path.open("rb") as file:
-        while True:
-            chunk = file.read(
-                1024 * 1024
-            )
-
-            if not chunk:
-                break
-
-            digest.update(
-                chunk
-            )
-
-    return digest.hexdigest()
-
-
-def validate_duckdb(
-    path: Path,
-) -> tuple[int, int]:
-    con = duckdb.connect(
-        str(path),
-        read_only=True,
-    )
-
-    try:
-        table_count = con.execute(
-            """
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            """
-        ).fetchone()[0]
-
-        view_count = con.execute(
-            """
-            SELECT COUNT(*)
-            FROM information_schema.views
-            """
-        ).fetchone()[0]
-
-        return (
-            table_count,
-            view_count,
-        )
-
-    finally:
-        con.close()
-
-
-def command_backup(
-    reason: str,
-    verify_checksum: bool,
-) -> int:
-    paths = configured_paths()
-
-    print()
-    print("DATABASE BACKUP")
-    print("=" * 120)
-    print(f"Source: {paths['database']}")
-    print(f"Reason: {reason}")
-    print()
-
-    result = create_database_backup(
-        database_path=paths["database"],
-        backup_directory=paths["backups"],
-        reason=reason,
-        verify_checksum=verify_checksum,
-    )
-
-    print(
-        format_backup_result(result)
-    )
-
-    print()
-    print("BACKUP VALIDATED")
-
-    return 0
-
 def collect_files(
     directory: Path,
     pattern: str,
@@ -247,9 +47,7 @@ def collect_files(
 
     files = [
         path
-        for path in directory.glob(
-            pattern
-        )
+        for path in directory.glob(pattern)
         if path.is_file()
     ]
 
@@ -267,7 +65,7 @@ def print_files(
 ) -> None:
     print()
     print(title)
-    print("-" * 120)
+    print("-" * 130)
 
     if not files:
         print("No files found.")
@@ -293,19 +91,49 @@ def print_files(
         )
 
 
+def command_backup(
+    *,
+    reason: str,
+    verify_checksum: bool,
+) -> int:
+    context = FrameworkContext.load()
+
+    print()
+    print("DATABASE BACKUP")
+    print("=" * 130)
+    print(f"Source: {context.paths.database}")
+    print(f"Reason: {reason}")
+    print()
+
+    result = context.create_backup(
+        reason,
+        verify_checksum=verify_checksum,
+    )
+
+    print(
+        format_backup_result(result)
+    )
+
+    print()
+    print("BACKUP VALIDATED")
+
+    return 0
+
+
 def command_logs(
+    *,
     limit: int,
 ) -> int:
-    paths = configured_paths()
+    context = FrameworkContext.load()
 
     print()
     print("SUBCONTRACTOR GENERATED OUTPUTS")
-    print("=" * 120)
+    print("=" * 130)
 
     print_files(
         "LATEST LOGS",
         collect_files(
-            paths["logs"],
+            context.paths.logs,
             "*.log",
             limit,
         ),
@@ -314,7 +142,7 @@ def command_logs(
     print_files(
         "LATEST REPORTS",
         collect_files(
-            paths["reports"],
+            context.paths.reports,
             "*",
             limit,
         ),
@@ -323,7 +151,7 @@ def command_logs(
     print_files(
         "LATEST DATABASE BACKUPS",
         collect_files(
-            paths["backups"],
+            context.paths.backups,
             "*.duckdb",
             limit,
         ),
@@ -333,45 +161,50 @@ def command_logs(
 
 
 def table_exists(
+    context: FrameworkContext,
     con: duckdb.DuckDBPyConnection,
     table_name: str,
 ) -> bool:
-    return bool(
-        con.execute(
-            """
-            SELECT COUNT(*)
-            FROM information_schema.tables
-            WHERE table_name = ?
-            """,
-            [table_name],
-        ).fetchone()[0]
+    return context.table_exists(
+        table_name,
+        connection=con,
     )
 
 
 def command_report() -> int:
-    paths = configured_paths()
-    database = paths["database"]
+    context = FrameworkContext.load()
 
-    if not database.exists():
-        raise FileNotFoundError(
-            f"Database not found: {database}"
-        )
-
-    con = duckdb.connect(
-        str(database),
+    con = context.connect(
         read_only=True,
     )
 
     try:
         print()
         print("SUBCONTRACTOR PIPELINE REPORT")
-        print("=" * 140)
+        print("=" * 150)
+
+        print()
+        print("FRAMEWORK")
+        print("-" * 150)
+        print(f"Project: {context.paths.project_root}")
+        print(f"Configuration: {context.paths.config}")
+        print(f"Target year: {context.target_year}")
+        print(
+            "Target districts: "
+            + ", ".join(
+                str(value)
+                for value in context.target_districts
+            )
+        )
 
         print()
         print("DATABASE")
-        print("-" * 140)
-        print(f"Path: {database}")
-        print(f"Size: {format_bytes(database.stat().st_size)}")
+        print("-" * 150)
+        print(f"Path: {context.paths.database}")
+        print(
+            "Size: "
+            f"{format_bytes(context.paths.database.stat().st_size)}"
+        )
 
         table_count = con.execute(
             """
@@ -380,7 +213,15 @@ def command_report() -> int:
             """
         ).fetchone()[0]
 
+        view_count = con.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.views
+            """
+        ).fetchone()[0]
+
         print(f"Tables: {table_count:,}")
+        print(f"Views: {view_count:,}")
 
         datasets = (
             (
@@ -390,6 +231,10 @@ def command_report() -> int:
             (
                 "2025 batch relationships",
                 "bid_tab_subcontractor_relationship_normalized_2025_batch1_v1",
+            ),
+            (
+                "2025 normalized V2",
+                "bid_tab_subcontractor_relationship_normalized_2025_v2",
             ),
             (
                 "Alternate promoted disclosures",
@@ -407,56 +252,62 @@ def command_report() -> int:
                 "Current relationships",
                 "bid_tab_subcontractor_relationship_current",
             ),
+            (
+                "Current relationships V2",
+                "bid_tab_subcontractor_relationship_current_v2",
+            ),
         )
 
         print()
         print("DATASET COVERAGE")
-        print("-" * 140)
+        print("-" * 150)
         print(
-            f"{'Dataset':<44}"
-            f"{'Rows':>12}"
+            f"{'Dataset':<46}"
+            f"{'Rows':>14}"
             f"{'Contracts':>14}"
         )
 
-        for label, table in datasets:
+        for label, table_name in datasets:
             if not table_exists(
+                context,
                 con,
-                table,
+                table_name,
             ):
                 print(
-                    f"{label:<44}"
-                    f"{'N/A':>12}"
+                    f"{label:<46}"
+                    f"{'N/A':>14}"
                     f"{'N/A':>14}"
                 )
                 continue
 
             columns = set(
                 con.execute(
-                    f'DESCRIBE "{table}"'
+                    f'DESCRIBE "{table_name}"'
                 ).fetchdf()["column_name"]
                 .astype(str)
+                .tolist()
             )
 
-            rows = con.execute(
-                f'SELECT COUNT(*) FROM "{table}"'
+            row_count = con.execute(
+                f'SELECT COUNT(*) FROM "{table_name}"'
             ).fetchone()[0]
 
-            contracts: int | str = "N/A"
+            contract_count: int | str = "N/A"
 
             if "contract_number" in columns:
-                contracts = con.execute(
+                contract_count = con.execute(
                     f"""
                     SELECT COUNT(
                         DISTINCT contract_number
                     )
-                    FROM "{table}"
+                    FROM "{table_name}"
                     """
                 ).fetchone()[0]
 
             print(
-                f"{label:<44}"
-                f"{rows:>12,}"
-                f"{contracts:>14}"
+                f"{label:<46}"
+                f"{row_count:>14,}"
+                f"{contract_count:>14}"
             )
 
         alt_table = (
@@ -465,12 +316,13 @@ def command_report() -> int:
         )
 
         if table_exists(
+            context,
             con,
             alt_table,
         ):
             print()
             print("ALTERNATE RELATIONSHIP CANDIDATE")
-            print("-" * 140)
+            print("-" * 150)
 
             print(
                 con.execute(
@@ -490,7 +342,7 @@ def command_report() -> int:
                             WHERE eligible_for_prime_pricing_analysis
                         ) AS pricing_eligible
 
-                    FROM {alt_table}
+                    FROM "{alt_table}"
 
                     GROUP BY
                         contract_number
@@ -503,18 +355,60 @@ def command_report() -> int:
                 )
             )
 
+        promotion_audit_table = (
+            "bid_tab_subcontractor_"
+            "alt_promotion_audit_2025_v1"
+        )
+
+        if table_exists(
+            context,
+            con,
+            promotion_audit_table,
+        ):
+            print()
+            print("ALTERNATE PROMOTION AUDIT")
+            print("-" * 150)
+
+            print(
+                con.execute(
+                    f"""
+                    SELECT
+                        promotion_audit_status,
+                        promoted_record_status,
+                        COUNT(*) AS bidder_blocks,
+                        SUM(disclosure_rows)
+                            AS disclosures,
+                        SUM(duplicate_disclosure_ids)
+                            AS duplicate_disclosure_ids
+
+                    FROM "{promotion_audit_table}"
+
+                    GROUP BY
+                        promotion_audit_status,
+                        promoted_record_status
+
+                    ORDER BY
+                        promotion_audit_status,
+                        promoted_record_status
+                    """
+                ).fetchdf().to_string(
+                    index=False
+                )
+            )
+
         quarantine_table = (
             "bid_tab_subcontractor_"
             "quarantined_2025_v1"
         )
 
         if table_exists(
+            context,
             con,
             quarantine_table,
         ):
             print()
             print("QUARANTINE")
-            print("-" * 140)
+            print("-" * 150)
 
             print(
                 con.execute(
@@ -526,7 +420,7 @@ def command_report() -> int:
                         quarantine_reason,
                         resolution_status
 
-                    FROM {quarantine_table}
+                    FROM "{quarantine_table}"
 
                     ORDER BY
                         contract_number
@@ -536,25 +430,54 @@ def command_report() -> int:
                 )
             )
 
+        print()
+        print("LATEST GENERATED OUTPUTS")
+        print("-" * 150)
+
         latest_backup = collect_files(
-            paths["backups"],
+            context.paths.backups,
             "*.duckdb",
             1,
         )
 
-        print()
-        print("LATEST BACKUP")
-        print("-" * 140)
+        latest_log = collect_files(
+            context.paths.logs,
+            "*.log",
+            1,
+        )
 
-        if latest_backup:
-            backup = latest_backup[0]
+        latest_report = collect_files(
+            context.paths.reports,
+            "*",
+            1,
+        )
 
-            print(
-                f"{backup.name} | "
-                f"{format_bytes(backup.stat().st_size)}"
+        print(
+            "Backup: "
+            + (
+                latest_backup[0].name
+                if latest_backup
+                else "None"
             )
-        else:
-            print("No backup found.")
+        )
+
+        print(
+            "Log: "
+            + (
+                latest_log[0].name
+                if latest_log
+                else "None"
+            )
+        )
+
+        print(
+            "Report: "
+            + (
+                latest_report[0].name
+                if latest_report
+                else "None"
+            )
+        )
 
     finally:
         con.close()
@@ -577,36 +500,50 @@ def build_parser() -> argparse.ArgumentParser:
 
     backup_parser = subparsers.add_parser(
         "backup",
-        help="Create and validate a database backup.",
+        help=(
+            "Create and validate a database backup."
+        ),
     )
 
     backup_parser.add_argument(
         "--reason",
         default="manual",
-        help="Short reason included in the backup filename.",
+        help=(
+            "Short reason included in "
+            "the backup filename."
+        ),
     )
 
     backup_parser.add_argument(
         "--checksum",
         action="store_true",
-        help="Validate the backup using SHA256 checksums.",
+        help=(
+            "Validate source and backup "
+            "using SHA256."
+        ),
     )
 
     logs_parser = subparsers.add_parser(
         "logs",
-        help="List recent logs, reports, and backups.",
+        help=(
+            "List recent logs, reports, and backups."
+        ),
     )
 
     logs_parser.add_argument(
         "--limit",
         type=int,
         default=10,
-        help="Maximum files shown in each category.",
+        help=(
+            "Maximum files shown in each category."
+        ),
     )
 
     subparsers.add_parser(
         "report",
-        help="Show the consolidated pipeline report.",
+        help=(
+            "Show the consolidated pipeline report."
+        ),
     )
 
     return parser
@@ -618,20 +555,21 @@ def main() -> int:
 
     if arguments.operation == "backup":
         return command_backup(
-            arguments.reason,
-            arguments.checksum,
+            reason=arguments.reason,
+            verify_checksum=arguments.checksum,
         )
 
     if arguments.operation == "logs":
         return command_logs(
-            arguments.limit
+            limit=arguments.limit,
         )
 
     if arguments.operation == "report":
         return command_report()
 
     parser.error(
-        f"Unsupported operation: {arguments.operation}"
+        f"Unsupported operation: "
+        f"{arguments.operation}"
     )
 
     return 2
