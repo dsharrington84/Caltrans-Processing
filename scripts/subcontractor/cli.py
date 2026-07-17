@@ -189,10 +189,9 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command(
         name="doctor",
-        module="scripts.subcontractor.operations",
+        module="scripts.subcontractor.doctor",
         description="Check framework and repository health.",
         category="Operations",
-        arguments=("doctor",),
     ),
     Command(
         name="stats",
