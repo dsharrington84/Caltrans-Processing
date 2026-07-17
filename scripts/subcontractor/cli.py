@@ -3,22 +3,18 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from scripts.subcontractor.command_model import (
+    Command,
+)
+from scripts.subcontractor.commands import (
+    discover_commands,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-@dataclass(frozen=True)
-class Command:
-    name: str
-    module: str
-    description: str
-    category: str
-    arguments: tuple[str, ...] = ()
-    aliases: tuple[str, ...] = ()
 
 
 COMMANDS: tuple[Command, ...] = (
@@ -231,29 +227,21 @@ COMMANDS: tuple[Command, ...] = (
         arguments=("report",),
     ),
 
-    Command(
-        name="test",
-        module="scripts.subcontractor.quality",
-        description="Run all subcontractor test modules.",
-        category="Quality",
-        arguments=("test",),
-    ),
-    Command(
-        name="check",
-        module="scripts.subcontractor.quality",
-        description="Run verification, doctor, and all tests.",
-        category="Quality",
-        arguments=("check",),
-        aliases=("preflight",),
-    ),
 
+)
+
+PLUGIN_COMMANDS = discover_commands()
+
+ALL_COMMANDS: tuple[Command, ...] = (
+    *COMMANDS,
+    *PLUGIN_COMMANDS,
 )
 
 
 def build_command_index() -> dict[str, Command]:
     index: dict[str, Command] = {}
 
-    for command in COMMANDS:
+    for command in ALL_COMMANDS:
         names = (
             command.name,
             *command.aliases,
@@ -284,7 +272,7 @@ def print_command_list() -> None:
 
     categories: list[str] = []
 
-    for command in COMMANDS:
+    for command in ALL_COMMANDS:
         if command.category not in categories:
             categories.append(
                 command.category
@@ -295,7 +283,7 @@ def print_command_list() -> None:
         print(category.upper())
         print("-" * 100)
 
-        for command in COMMANDS:
+        for command in ALL_COMMANDS:
             if command.category != category:
                 continue
 
@@ -332,7 +320,7 @@ def print_command_list() -> None:
 
 
 def print_command_names() -> None:
-    for command in COMMANDS:
+    for command in ALL_COMMANDS:
         print(command.name)
 
 
