@@ -187,6 +187,29 @@ COMMANDS: tuple[Command, ...] = (
         category="Pipelines",
         aliases=("pipeline-alt",),
     ),
+    Command(
+        name="doctor",
+        module="scripts.subcontractor.operations",
+        description="Check framework and repository health.",
+        category="Operations",
+        arguments=("doctor",),
+    ),
+    Command(
+        name="stats",
+        module="scripts.subcontractor.operations",
+        description="Show production and pipeline statistics.",
+        category="Operations",
+        arguments=("stats",),
+    ),
+    Command(
+        name="config-show",
+        module="scripts.subcontractor.operations",
+        description="Display subcontractor configuration and resolved paths.",
+        category="Operations",
+        arguments=("config-show",),
+        aliases=("config",),
+    ),
+
 )
 
 
