@@ -92,6 +92,12 @@ COMMANDS: tuple[Command, ...] = (
         module="scripts.subcontractor.stages.audit_quarantine_context",
         description="Extract full-PDF context for quarantined contracts.",
     ),
+    Command(
+        name="run-alt",
+        module="scripts.subcontractor.stages.run_alternate_pipeline",
+        description="Run the alternate-layout pipeline.",
+    ),
+
 )
 
 
