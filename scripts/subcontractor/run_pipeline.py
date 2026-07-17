@@ -5,6 +5,10 @@ import sys
 from pathlib import Path
 
 from scripts.subcontractor.config import PipelineConfig
+
+from scripts.subcontractor.framework import (
+    FrameworkContext,
+)
 from scripts.subcontractor.database import (
     connect_database,
     list_database_objects,
@@ -495,8 +499,9 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> int:
     arguments = parse_arguments()
 
-    config = PipelineConfig.load(
-        arguments.settings
+    context = FrameworkContext.load()
+    config = pipeline_config_from_context(
+        context
     )
 
     config.ensure_directories()
