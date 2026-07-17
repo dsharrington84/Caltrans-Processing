@@ -16,14 +16,29 @@ def main() -> int:
     ]
 
     required = {
-        "test",
-        "check",
+        "verify",
+        "status",
+        "cache-stage1",
+        "validate-stage1",
+        "parse-alt-pages",
+        "group-alt",
+        "reconcile-alt",
+        "parse-alt",
+        "certify-alt",
+        "identity-alt",
+        "promote-alt",
+        "audit-bidders",
+        "audit-quarantine",
+        "audit-context",
+        "run-alt",
         "doctor",
         "stats",
         "config-show",
         "backup",
         "logs",
         "report",
+        "test",
+        "check",
     }
 
     missing = required.difference(
@@ -59,8 +74,13 @@ def main() -> int:
     ]
 
     required_aliases = {
-        "preflight",
+        "cache",
+        "validate",
+        "detect-alt",
+        "quarantine",
+        "pipeline-alt",
         "config",
+        "preflight",
     }
 
     missing_aliases = (
