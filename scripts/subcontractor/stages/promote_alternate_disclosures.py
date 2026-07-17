@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import pandas as pd
 
+
+from scripts.subcontractor.stage_runtime import (
+    Stage,
+    run_stage,
+)
+
 from scripts.subcontractor.config import PipelineConfig
 from scripts.subcontractor.database import (
     connect_database,
-    create_backup,
     ensure_target_objects_absent,
     quote_identifier,
     require_objects,
@@ -245,12 +250,6 @@ def run(
             f"{audit_failures:,}"
         )
 
-    backup_path = create_backup(
-        config.database_path,
-        config.backup_directory,
-        "2025_alternate_disclosure_promotion",
-    )
-
     write_connection = connect_database(
         config.database_path,
         read_only=False,
@@ -460,12 +459,6 @@ def run(
 
     log_key_value(
         logger,
-        "Backup",
-        backup_path,
-    )
-
-    log_key_value(
-        logger,
         "Log",
         log_path,
     )
@@ -544,10 +537,44 @@ def run(
     return 0
 
 
+
+class PromoteAlternateDisclosuresStage(Stage):
+    name = "promote-alternate-disclosures"
+    description = (
+        "Promote certified alternate-layout "
+        "subcontractor disclosures."
+    )
+    writes_database = True
+    backup_reason = (
+        "before_2025_alt_disclosure_promotion"
+    )
+
+    def open_connection(self) -> None:
+        # The legacy run() function still owns its DuckDB
+        # connection during this transitional migration.
+        self.connection = None
+
+    def execute(self) -> dict[str, object]:
+        legacy_config = PipelineConfig.load()
+
+        result = run(
+            legacy_config
+        )
+
+        if isinstance(result, dict):
+            return result
+
+        return {
+            "legacy_return_value": result,
+        }
+
+
+
+
 def main() -> int:
-    config = PipelineConfig.load()
-    config.ensure_directories()
-    return run(config)
+    return run_stage(
+        PromoteAlternateDisclosuresStage
+    )
 
 
 if __name__ == "__main__":
