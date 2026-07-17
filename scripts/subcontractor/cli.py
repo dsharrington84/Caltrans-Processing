@@ -210,6 +210,28 @@ COMMANDS: tuple[Command, ...] = (
         aliases=("config",),
     ),
 
+    Command(
+        name="backup",
+        module="scripts.subcontractor.maintenance",
+        description="Create and validate a database backup.",
+        category="Operations",
+        arguments=("backup",),
+    ),
+    Command(
+        name="logs",
+        module="scripts.subcontractor.maintenance",
+        description="List recent logs, reports, and backups.",
+        category="Operations",
+        arguments=("logs",),
+    ),
+    Command(
+        name="report",
+        module="scripts.subcontractor.maintenance",
+        description="Show a consolidated pipeline report.",
+        category="Operations",
+        arguments=("report",),
+    ),
+
 )
 
 
