@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Databases
+*.duckdb
+*.duckdb.wal
+
+# Database backups
+data/database/backups/
+
+# Generated artifacts
+data/cache/
+data/logs/
+data/reports/
+
+# PDFs
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,19 @@
+{
+  "database_path": "data/database/caltrans_pricing.duckdb",
+  "backup_directory": "data/database/backups",
+  "cache_directory": "data/cache/subcontractor_pdf_text",
+  "log_directory": "data/logs/subcontractor",
+  "target_year": 2025,
+  "target_districts": [7, 8, 11, 12],
+  "tables": {
+    "manifest": "bid_tab_subcontractor_intake_manifest_2025_incremental_v2",
+    "preflight": "bid_tab_subcontractor_preflight_2025_incremental_v1",
+    "parse_plan": "bid_tab_subcontractor_parse_plan_2025_incremental_v1",
+    "page_audit": "bid_tab_subcontractor_page_audit_2025_incremental_v1",
+    "raw_pages": "bid_tab_subcontractor_raw_page_text_2025_incremental_v1",
+    "bidder_sections": "bid_tab_subcontractor_bidder_section_staging_2025_incremental_v1",
+    "disclosure_lines": "bid_tab_subcontractor_disclosure_line_staging_2025_incremental_v1",
+    "rejected_lines": "bid_tab_subcontractor_rejected_line_2025_incremental_v1",
+    "stage1_audit": "bid_tab_subcontractor_stage1_parse_audit_2025_incremental_v1"
+  }
+}
