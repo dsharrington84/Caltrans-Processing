@@ -496,6 +496,28 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
+def pipeline_config_from_context(
+    context: FrameworkContext,
+) -> PipelineConfig:
+    if context.target_year is None:
+        raise RuntimeError(
+            "Framework target_year is not configured."
+        )
+
+    return PipelineConfig(
+        project_root=context.paths.project_root,
+        database_path=context.paths.database,
+        backup_directory=context.paths.backups,
+        cache_directory=context.paths.cache,
+        log_directory=context.paths.logs,
+        target_year=context.target_year,
+        target_districts=context.target_districts,
+        tables=context.tables,
+    )
+
+
+
 def main() -> int:
     arguments = parse_arguments()
 
