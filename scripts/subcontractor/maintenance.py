@@ -10,6 +10,11 @@ from typing import Any
 
 import duckdb
 
+from scripts.subcontractor.backup_service import (
+    create_database_backup,
+    format_backup_result,
+)
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -209,115 +214,28 @@ def command_backup(
 ) -> int:
     paths = configured_paths()
 
-    database = paths["database"]
-    backup_directory = paths["backups"]
-
-    if not database.exists():
-        raise FileNotFoundError(
-            f"Database not found: {database}"
-        )
-
-    if database.stat().st_size == 0:
-        raise RuntimeError(
-            "Database is zero bytes."
-        )
-
-    backup_directory.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    timestamp = datetime.now().strftime(
-        "%Y%m%d_%H%M%S"
-    )
-
-    reason_slug = safe_slug(
-        reason
-    )
-
-    destination = (
-        backup_directory
-        / (
-            "caltrans_pricing_"
-            f"{reason_slug}_"
-            f"{timestamp}.duckdb"
-        )
-    )
-
     print()
     print("DATABASE BACKUP")
     print("=" * 120)
-    print(f"Source: {database}")
+    print(f"Source: {paths['database']}")
     print(f"Reason: {reason}")
-    print(f"Destination: {destination}")
     print()
 
-    source_tables, source_views = validate_duckdb(
-        database
+    result = create_database_backup(
+        database_path=paths["database"],
+        backup_directory=paths["backups"],
+        reason=reason,
+        verify_checksum=verify_checksum,
     )
 
-    shutil.copy2(
-        database,
-        destination,
+    print(
+        format_backup_result(result)
     )
-
-    if not destination.exists():
-        raise RuntimeError(
-            "Backup file was not created."
-        )
-
-    source_size = database.stat().st_size
-    destination_size = destination.stat().st_size
-
-    if source_size != destination_size:
-        raise RuntimeError(
-            "Backup size does not match source."
-        )
-
-    backup_tables, backup_views = validate_duckdb(
-        destination
-    )
-
-    if (
-        backup_tables != source_tables
-        or backup_views != source_views
-    ):
-        raise RuntimeError(
-            "Backup database object counts "
-            "do not match the source."
-        )
-
-    source_checksum = None
-    destination_checksum = None
-
-    if verify_checksum:
-        source_checksum = checksum(
-            database
-        )
-
-        destination_checksum = checksum(
-            destination
-        )
-
-        if source_checksum != destination_checksum:
-            raise RuntimeError(
-                "Backup checksum validation failed."
-            )
-
-    print(f"Size: {format_bytes(destination_size)}")
-    print(f"Tables: {backup_tables:,}")
-    print(f"Views: {backup_views:,}")
-
-    if destination_checksum is not None:
-        print(
-            f"SHA256: {destination_checksum}"
-        )
 
     print()
     print("BACKUP VALIDATED")
 
     return 0
-
 
 def collect_files(
     directory: Path,
