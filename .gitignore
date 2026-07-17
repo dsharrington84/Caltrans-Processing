@@ -59,3 +59,7 @@ schema_inventory.txt
 *.tmp
 *.swp
 *~
+
+# Local machine paths
+/data
+/wsl
