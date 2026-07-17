@@ -56,15 +56,30 @@ class DatabaseDoctorReport:
 
 REQUIRED_PRODUCTION_OBJECTS = (
     "bid_tab_subcontractor_relationship_current",
-    "bid_tab_subcontractor_relationship_current_v2",
     "bid_tab_subcontractor_relationship_normalized_2025_v2",
 )
 
 
-RELATIONSHIP_ID_CANDIDATES = (
-    "relationship_id",
-    "disclosure_id",
-    "subcontractor_disclosure_id",
+CURRENT_RELATIONSHIP_OBJECT = (
+    "bid_tab_subcontractor_relationship_current"
+)
+
+
+CURRENT_RELATIONSHIP_REQUIRED_COLUMNS = (
+    "contract_number",
+    "prime_bidder_id",
+    "prime_bidder_name",
+    "subcontractor_name",
+    "relationship_status",
+    "source_pdf",
+)
+
+
+CURRENT_RELATIONSHIP_BUSINESS_KEY = (
+    "contract_number",
+    "prime_bidder_id",
+    "subcontractor_license_number",
+    "subcontractor_name",
 )
 
 
@@ -274,8 +289,11 @@ def check_required_production_tables(
         name="REQUIRED_PRODUCTION_TABLES",
         status=CheckStatus.PASS,
         summary=(
-            f"All {len(REQUIRED_PRODUCTION_OBJECTS):,} "
-            "required production objects are present."
+            "The authoritative current relationship view "
+            "and normalized 2025 relationship object are present."
+        ),
+        details=tuple(
+            REQUIRED_PRODUCTION_OBJECTS
         ),
     )
 
@@ -293,92 +311,301 @@ def relationship_tables(
             yield table_name
 
 
-def check_duplicate_relationship_ids(
+
+def check_current_relationship_integrity(
     con: duckdb.DuckDBPyConnection,
 ) -> DatabaseCheck:
-    duplicate_findings: list[str] = []
-    inspected_tables = 0
-
-    for table_name in relationship_tables(
-        con
-    ):
-        columns = table_columns(
-            con,
-            table_name,
+    available = {
+        table_name
+        for table_name, _ in main_schema_objects(
+            con
         )
+    }
 
-        identifier = next(
-            (
-                candidate
-                for candidate in RELATIONSHIP_ID_CANDIDATES
-                if candidate in columns
+    if CURRENT_RELATIONSHIP_OBJECT not in available:
+        return DatabaseCheck(
+            name="CURRENT_RELATIONSHIP_INTEGRITY",
+            status=CheckStatus.FAIL,
+            summary=(
+                "The authoritative current relationship "
+                "view is missing."
             ),
-            None,
+            details=(
+                CURRENT_RELATIONSHIP_OBJECT,
+            ),
         )
 
-        if identifier is None:
-            continue
+    columns = set(
+        table_columns(
+            con,
+            CURRENT_RELATIONSHIP_OBJECT,
+        )
+    )
 
-        inspected_tables += 1
+    missing_columns = [
+        column
+        for column in CURRENT_RELATIONSHIP_REQUIRED_COLUMNS
+        if column not in columns
+    ]
 
-        duplicate_count = con.execute(
+    if missing_columns:
+        return DatabaseCheck(
+            name="CURRENT_RELATIONSHIP_INTEGRITY",
+            status=CheckStatus.FAIL,
+            summary=(
+                f"{len(missing_columns):,} required column(s) "
+                "are missing from the current relationship view."
+            ),
+            details=tuple(
+                missing_columns
+            ),
+        )
+
+    null_checks = {
+        "contract_number": con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+            WHERE contract_number IS NULL
+               OR TRIM(contract_number) = ''
+            """
+        ).fetchone()[0],
+        "prime_bidder_id": con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+            WHERE prime_bidder_id IS NULL
+               OR TRIM(prime_bidder_id) = ''
+            """
+        ).fetchone()[0],
+        "prime_bidder_name": con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+            WHERE prime_bidder_name IS NULL
+               OR TRIM(prime_bidder_name) = ''
+            """
+        ).fetchone()[0],
+        "subcontractor_name": con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+            WHERE subcontractor_name IS NULL
+               OR TRIM(subcontractor_name) = ''
+            """
+        ).fetchone()[0],
+        "source_pdf_active": con.execute(
             f"""
             SELECT COUNT(*)
 
-            FROM (
-                SELECT
-                    {quote_identifier(identifier)}
+            FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
 
-                FROM {quote_identifier(table_name)}
-
-                WHERE {quote_identifier(identifier)}
-                    IS NOT NULL
-
-                GROUP BY
-                    {quote_identifier(identifier)}
-
-                HAVING COUNT(*) > 1
-            )
+            WHERE bid_opening_date IS NOT NULL
+              AND (
+                    source_pdf IS NULL
+                 OR TRIM(source_pdf) = ''
+              )
             """
-        ).fetchone()[0]
+        ).fetchone()[0],
+    }
 
-        if duplicate_count:
-            duplicate_findings.append(
-                f"{table_name}.{identifier}: "
-                f"{duplicate_count:,} duplicated value(s)"
+    duplicate_business_keys = con.execute(
+        f"""
+        SELECT COUNT(*)
+
+        FROM (
+            SELECT
+                contract_number,
+                prime_bidder_id,
+                COALESCE(
+                    subcontractor_license_number,
+                    ''
+                ) AS subcontractor_license_number,
+                subcontractor_name
+
+            FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+
+            GROUP BY
+                contract_number,
+                prime_bidder_id,
+                COALESCE(
+                    subcontractor_license_number,
+                    ''
+                ),
+                subcontractor_name
+
+            HAVING COUNT(*) > 1
+        )
+        """
+    ).fetchone()[0]
+
+    missing_status = con.execute(
+        f"""
+        SELECT COUNT(*)
+
+        FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+
+        WHERE relationship_status IS NULL
+           OR TRIM(relationship_status) = ''
+        """
+    ).fetchone()[0]
+
+    failures: list[str] = []
+
+    for column, count in null_checks.items():
+        if count:
+            label = (
+                "source_pdf on active rows"
+                if column == "source_pdf_active"
+                else column
             )
 
-    if duplicate_findings:
+            failures.append(
+                f"{label}: {count:,} missing value(s)"
+            )
+
+    if duplicate_business_keys:
+        failures.append(
+            "business key: "
+            f"{duplicate_business_keys:,} duplicate group(s)"
+        )
+
+    if missing_status:
+        failures.append(
+            "relationship_status: "
+            f"{missing_status:,} missing value(s)"
+        )
+
+    if failures:
         return DatabaseCheck(
-            name="DUPLICATE_RELATIONSHIP_IDS",
+            name="CURRENT_RELATIONSHIP_INTEGRITY",
             status=CheckStatus.FAIL,
             summary=(
-                f"Duplicate identifiers were found in "
-                f"{len(duplicate_findings):,} table(s)."
+                "The authoritative current relationship "
+                "view contains integrity failures."
             ),
             details=tuple(
-                duplicate_findings
+                failures
             ),
         )
 
-    if inspected_tables == 0:
+    row_count = con.execute(
+        f"""
+        SELECT COUNT(*)
+        FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+        """
+    ).fetchone()[0]
+
+    return DatabaseCheck(
+        name="CURRENT_RELATIONSHIP_INTEGRITY",
+        status=CheckStatus.PASS,
+        summary=(
+            f"Validated {row_count:,} current relationship row(s) "
+            "using required columns and the business key."
+        ),
+        details=(
+            "Business key: "
+            + ", ".join(
+                CURRENT_RELATIONSHIP_BUSINESS_KEY
+            ),
+        ),
+    )
+
+
+
+
+def check_legacy_provenance(
+    con: duckdb.DuckDBPyConnection,
+) -> DatabaseCheck:
+    available = {
+        table_name
+        for table_name, _ in main_schema_objects(
+            con
+        )
+    }
+
+    if CURRENT_RELATIONSHIP_OBJECT not in available:
         return DatabaseCheck(
-            name="DUPLICATE_RELATIONSHIP_IDS",
+            name="LEGACY_PROVENANCE",
+            status=CheckStatus.FAIL,
+            summary=(
+                "The authoritative current relationship "
+                "view is missing."
+            ),
+            details=(
+                CURRENT_RELATIONSHIP_OBJECT,
+            ),
+        )
+
+    legacy_rows = con.execute(
+        f"""
+        SELECT COUNT(*)
+
+        FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+
+        WHERE bid_opening_date IS NULL
+          AND (
+                source_pdf IS NULL
+             OR TRIM(source_pdf) = ''
+          )
+        """
+    ).fetchone()[0]
+
+    pricing_eligible_legacy_rows = con.execute(
+        f"""
+        SELECT COUNT(*)
+
+        FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+
+        WHERE bid_opening_date IS NULL
+          AND (
+                source_pdf IS NULL
+             OR TRIM(source_pdf) = ''
+          )
+          AND eligible_for_prime_pricing_analysis
+        """
+    ).fetchone()[0]
+
+    disclosure_only_legacy_rows = con.execute(
+        f"""
+        SELECT COUNT(*)
+
+        FROM {quote_identifier(CURRENT_RELATIONSHIP_OBJECT)}
+
+        WHERE bid_opening_date IS NULL
+          AND (
+                source_pdf IS NULL
+             OR TRIM(source_pdf) = ''
+          )
+          AND NOT eligible_for_prime_pricing_analysis
+        """
+    ).fetchone()[0]
+
+    if legacy_rows:
+        return DatabaseCheck(
+            name="LEGACY_PROVENANCE",
             status=CheckStatus.WARN,
             summary=(
-                "No relationship tables containing a recognized "
-                "identifier column were found."
+                f"{legacy_rows:,} legacy relationship row(s) "
+                "lack bid-date and source-PDF provenance."
+            ),
+            details=(
+                "Pricing eligible: "
+                f"{pricing_eligible_legacy_rows:,}",
+                "Disclosure only/non-pricing eligible: "
+                f"{disclosure_only_legacy_rows:,}",
             ),
         )
 
     return DatabaseCheck(
-        name="DUPLICATE_RELATIONSHIP_IDS",
+        name="LEGACY_PROVENANCE",
         status=CheckStatus.PASS,
         summary=(
-            f"No duplicate identifiers found across "
-            f"{inspected_tables:,} inspected relationship table(s)."
+            "No legacy relationship rows are missing "
+            "bid-date and source-PDF provenance."
         ),
     )
+
 
 
 def run_database_doctor(
@@ -405,7 +632,10 @@ def run_database_doctor(
             check_empty_tables(
                 con
             ),
-            check_duplicate_relationship_ids(
+            check_current_relationship_integrity(
+                con
+            ),
+            check_legacy_provenance(
                 con
             ),
             check_required_production_tables(
