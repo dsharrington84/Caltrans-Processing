@@ -36,6 +36,7 @@ def main() -> int:
 
         files = (
             "07-4V5004.pdf",
+            "07-0W6704.pdf",
             "08-1P2804.pdf",
             "12-0K0244.pdf",
             "12-0K0244 (1).pdf",
@@ -54,6 +55,9 @@ def main() -> int:
             folder=folder,
             current_contracts={
                 "07-4V5004",
+            },
+            current_other_year_contracts={
+                "07-0W6704",
             },
             normalized_contracts={
                 "07-4V5004",
@@ -74,6 +78,13 @@ def main() -> int:
                 "07-4V5004.pdf"
             ].pipeline_status
             == "CURRENT"
+        )
+
+        assert (
+            by_filename[
+                "07-0W6704.pdf"
+            ].pipeline_status
+            == "CURRENT_OTHER_YEAR"
         )
 
         assert (
