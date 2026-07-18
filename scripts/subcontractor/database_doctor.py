@@ -1053,6 +1053,493 @@ def check_promotion_reconciliation(
 
 
 
+
+IDENTITY_OVERLAY_OBJECT = (
+    "bid_tab_subcontractor_"
+    "disclosure_2025_alt_identity_overlay_v1"
+)
+
+IDENTITY_AUDIT_OBJECT = (
+    "bid_tab_subcontractor_"
+    "alt_identity_audit_2025_v1"
+)
+
+IDENTITY_REVIEW_OBJECT = (
+    "bid_tab_subcontractor_"
+    "alt_identity_review_2025_v1"
+)
+
+
+def check_identity_integrity(
+    con: duckdb.DuckDBPyConnection,
+) -> DatabaseCheck:
+    available = {
+        table_name
+        for table_name, _ in main_schema_objects(
+            con
+        )
+    }
+
+    if CURRENT_RELATIONSHIP_OBJECT not in available:
+        return DatabaseCheck(
+            name="IDENTITY_INTEGRITY",
+            status=CheckStatus.FAIL,
+            summary=(
+                "The authoritative current relationship "
+                "view is missing."
+            ),
+            details=(
+                CURRENT_RELATIONSHIP_OBJECT,
+            ),
+        )
+
+    current_columns = object_columns(
+        con,
+        CURRENT_RELATIONSHIP_OBJECT,
+    )
+
+    required_current_columns = {
+        "prime_bidder_id",
+        "prime_bidder_name",
+        "subcontractor_license_number",
+        "subcontractor_name",
+    }
+
+    missing_current_columns = sorted(
+        required_current_columns
+        - current_columns
+    )
+
+    if missing_current_columns:
+        return DatabaseCheck(
+            name="IDENTITY_INTEGRITY",
+            status=CheckStatus.FAIL,
+            summary=(
+                f"{len(missing_current_columns):,} identity "
+                "column(s) are missing from the current "
+                "relationship view."
+            ),
+            details=tuple(
+                missing_current_columns
+            ),
+        )
+
+    failures: list[str] = []
+    warnings: list[str] = []
+    details: list[str] = []
+
+    missing_prime_bidder_id = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+
+            FROM {
+                quote_identifier(
+                    CURRENT_RELATIONSHIP_OBJECT
+                )
+            }
+
+            WHERE prime_bidder_id IS NULL
+               OR TRIM(prime_bidder_id) = ''
+            """
+        ).fetchone()[0]
+    )
+
+    missing_prime_bidder_name = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+
+            FROM {
+                quote_identifier(
+                    CURRENT_RELATIONSHIP_OBJECT
+                )
+            }
+
+            WHERE prime_bidder_name IS NULL
+               OR TRIM(prime_bidder_name) = ''
+            """
+        ).fetchone()[0]
+    )
+
+    missing_subcontractor_name = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+
+            FROM {
+                quote_identifier(
+                    CURRENT_RELATIONSHIP_OBJECT
+                )
+            }
+
+            WHERE subcontractor_name IS NULL
+               OR TRIM(subcontractor_name) = ''
+            """
+        ).fetchone()[0]
+    )
+
+    missing_subcontractor_license = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+
+            FROM {
+                quote_identifier(
+                    CURRENT_RELATIONSHIP_OBJECT
+                )
+            }
+
+            WHERE subcontractor_license_number IS NULL
+               OR TRIM(
+                    CAST(
+                        subcontractor_license_number
+                        AS VARCHAR
+                    )
+               ) = ''
+            """
+        ).fetchone()[0]
+    )
+
+    if missing_prime_bidder_id:
+        failures.append(
+            "prime_bidder_id: "
+            f"{missing_prime_bidder_id:,} missing value(s)"
+        )
+
+    if missing_prime_bidder_name:
+        failures.append(
+            "prime_bidder_name: "
+            f"{missing_prime_bidder_name:,} missing value(s)"
+        )
+
+    if missing_subcontractor_name:
+        failures.append(
+            "subcontractor_name: "
+            f"{missing_subcontractor_name:,} missing value(s)"
+        )
+
+    if missing_subcontractor_license:
+        warnings.append(
+            "subcontractor_license_number: "
+            f"{missing_subcontractor_license:,} missing value(s)"
+        )
+
+    prime_name_conflicts = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+
+            FROM (
+                SELECT
+                    prime_bidder_id
+
+                FROM {
+                    quote_identifier(
+                        CURRENT_RELATIONSHIP_OBJECT
+                    )
+                }
+
+                WHERE prime_bidder_id IS NOT NULL
+                  AND TRIM(prime_bidder_id) <> ''
+                  AND prime_bidder_name IS NOT NULL
+                  AND TRIM(prime_bidder_name) <> ''
+
+                GROUP BY
+                    prime_bidder_id
+
+                HAVING COUNT(
+                    DISTINCT UPPER(
+                        TRIM(prime_bidder_name)
+                    )
+                ) > 1
+            )
+            """
+        ).fetchone()[0]
+    )
+
+    if prime_name_conflicts:
+        warnings.append(
+            f"{prime_name_conflicts:,} prime bidder ID(s) "
+            "map to multiple exact normalized names."
+        )
+    else:
+        details.append(
+            "Prime bidder IDs map to one exact "
+            "normalized name each."
+        )
+
+    license_name_conflicts = int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+
+            FROM (
+                SELECT
+                    subcontractor_license_number
+
+                FROM {
+                    quote_identifier(
+                        CURRENT_RELATIONSHIP_OBJECT
+                    )
+                }
+
+                WHERE subcontractor_license_number IS NOT NULL
+                  AND TRIM(
+                        CAST(
+                            subcontractor_license_number
+                            AS VARCHAR
+                        )
+                  ) <> ''
+                  AND subcontractor_name IS NOT NULL
+                  AND TRIM(subcontractor_name) <> ''
+
+                GROUP BY
+                    subcontractor_license_number
+
+                HAVING COUNT(
+                    DISTINCT UPPER(
+                        TRIM(subcontractor_name)
+                    )
+                ) > 1
+            )
+            """
+        ).fetchone()[0]
+    )
+
+    if license_name_conflicts:
+        warnings.append(
+            f"{license_name_conflicts:,} subcontractor "
+            "license number(s) map to multiple exact "
+            "normalized names."
+        )
+    else:
+        details.append(
+            "Subcontractor licenses map to one exact "
+            "normalized name each."
+        )
+
+    if IDENTITY_OVERLAY_OBJECT in available:
+        overlay_columns = object_columns(
+            con,
+            IDENTITY_OVERLAY_OBJECT,
+        )
+
+        overlay_rows = object_row_count(
+            con,
+            IDENTITY_OVERLAY_OBJECT,
+        )
+
+        details.append(
+            f"Identity overlay rows: {overlay_rows:,}"
+        )
+
+        if "production_identity_class" in overlay_columns:
+            identity_gap_rows = int(
+                con.execute(
+                    f"""
+                    SELECT COUNT(*)
+
+                    FROM {
+                        quote_identifier(
+                            IDENTITY_OVERLAY_OBJECT
+                        )
+                    }
+
+                    WHERE UPPER(
+                        TRIM(
+                            CAST(
+                                production_identity_class
+                                AS VARCHAR
+                            )
+                        )
+                    ) LIKE '%GAP%'
+                    """
+                ).fetchone()[0]
+            )
+
+            if identity_gap_rows:
+                warnings.append(
+                    f"{identity_gap_rows:,} identity-overlay "
+                    "row(s) remain classified as identity gaps."
+                )
+            else:
+                details.append(
+                    "No identity-overlay rows remain "
+                    "classified as identity gaps."
+                )
+
+        if (
+            "eligible_for_prime_pricing_analysis"
+            in overlay_columns
+        ):
+            ineligible_rows = int(
+                con.execute(
+                    f"""
+                    SELECT COUNT(*)
+
+                    FROM {
+                        quote_identifier(
+                            IDENTITY_OVERLAY_OBJECT
+                        )
+                    }
+
+                    WHERE NOT COALESCE(
+                        eligible_for_prime_pricing_analysis,
+                        FALSE
+                    )
+                    """
+                ).fetchone()[0]
+            )
+
+            details.append(
+                "Identity-overlay rows not eligible for "
+                f"prime pricing analysis: {ineligible_rows:,}"
+            )
+    else:
+        warnings.append(
+            "Alternate identity overlay object is missing."
+        )
+
+    if IDENTITY_AUDIT_OBJECT in available:
+        audit_columns = object_columns(
+            con,
+            IDENTITY_AUDIT_OBJECT,
+        )
+
+        audit_rows = object_row_count(
+            con,
+            IDENTITY_AUDIT_OBJECT,
+        )
+
+        details.append(
+            f"Identity audit rows: {audit_rows:,}"
+        )
+
+        status_column = next(
+            (
+                column
+                for column in (
+                    "identity_audit_status",
+                    "audit_status",
+                    "status",
+                )
+                if column in audit_columns
+            ),
+            None,
+        )
+
+        if status_column is not None:
+            failed_audit_rows = int(
+                con.execute(
+                    f"""
+                    SELECT COUNT(*)
+
+                    FROM {
+                        quote_identifier(
+                            IDENTITY_AUDIT_OBJECT
+                        )
+                    }
+
+                    WHERE {
+                        quote_identifier(
+                            status_column
+                        )
+                    } IS NULL
+                       OR UPPER(
+                            TRIM(
+                                CAST(
+                                    {
+                                        quote_identifier(
+                                            status_column
+                                        )
+                                    }
+                                    AS VARCHAR
+                                )
+                            )
+                       ) NOT IN (
+                            'PASSED',
+                            'PASS',
+                            'READY',
+                            'RESOLVED'
+                       )
+                    """
+                ).fetchone()[0]
+            )
+
+            if failed_audit_rows:
+                warnings.append(
+                    f"{failed_audit_rows:,} identity audit "
+                    "row(s) are not in a passing status."
+                )
+    else:
+        warnings.append(
+            "Alternate identity audit object is missing."
+        )
+
+    if IDENTITY_REVIEW_OBJECT in available:
+        review_rows = object_row_count(
+            con,
+            IDENTITY_REVIEW_OBJECT,
+        )
+
+        if review_rows:
+            warnings.append(
+                f"{review_rows:,} identity review row(s) "
+                "remain in the review table."
+            )
+        else:
+            details.append(
+                "Identity review backlog is empty."
+            )
+    else:
+        warnings.append(
+            "Alternate identity review object is missing."
+        )
+
+    if failures:
+        return DatabaseCheck(
+            name="IDENTITY_INTEGRITY",
+            status=CheckStatus.FAIL,
+            summary=(
+                "Identity validation found "
+                f"{len(failures):,} failure(s)."
+            ),
+            details=tuple(
+                failures
+                + warnings
+                + details
+            ),
+        )
+
+    if warnings:
+        return DatabaseCheck(
+            name="IDENTITY_INTEGRITY",
+            status=CheckStatus.WARN,
+            summary=(
+                "Identity validation completed with "
+                f"{len(warnings):,} warning(s)."
+            ),
+            details=tuple(
+                warnings
+                + details
+            ),
+        )
+
+    return DatabaseCheck(
+        name="IDENTITY_INTEGRITY",
+        status=CheckStatus.PASS,
+        summary=(
+            "Prime bidder and subcontractor identity "
+            "mappings passed validation."
+        ),
+        details=tuple(
+            details
+        ),
+    )
+
+
+
 def run_database_doctor(
     context: FrameworkContext | None = None,
 ) -> DatabaseDoctorReport:
@@ -1084,6 +1571,9 @@ def run_database_doctor(
                 con
             ),
             check_promotion_reconciliation(
+                con
+            ),
+            check_identity_integrity(
                 con
             ),
             check_required_production_tables(
