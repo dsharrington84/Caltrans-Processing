@@ -42,6 +42,7 @@ PROMOTED_TABLES = (
 
 STATUS_ORDER = (
     "CURRENT",
+    "CURRENT_OTHER_YEAR",
     "NORMALIZED_NOT_CURRENT",
     "PROMOTED",
     "READY_FOR_PARSE",
@@ -188,6 +189,7 @@ def select_underlying_status(
     *,
     contract_number: str,
     current_contracts: set[str],
+    current_other_year_contracts: set[str],
     normalized_contracts: set[str],
     promoted_contracts: set[str],
 ) -> str:
@@ -196,6 +198,9 @@ def select_underlying_status(
 
     if contract_number in current_contracts:
         return "CURRENT"
+
+    if contract_number in current_other_year_contracts:
+        return "CURRENT_OTHER_YEAR"
 
     if contract_number in normalized_contracts:
         return "NORMALIZED_NOT_CURRENT"
@@ -210,6 +215,7 @@ def build_records(
     *,
     folder: Path,
     current_contracts: set[str],
+    current_other_year_contracts: set[str],
     normalized_contracts: set[str],
     promoted_contracts: set[str],
     recursive: bool,
@@ -285,6 +291,9 @@ def build_records(
                 ),
                 current_contracts=(
                     current_contracts
+                ),
+                current_other_year_contracts=(
+                    current_other_year_contracts
                 ),
                 normalized_contracts=(
                     normalized_contracts
@@ -428,6 +437,7 @@ def print_summary(
             and record.underlying_status
             in {
                 "CURRENT",
+                "CURRENT_OTHER_YEAR",
                 "NORMALIZED_NOT_CURRENT",
                 "PROMOTED",
             }
@@ -649,6 +659,20 @@ def main() -> int:
             )
         )
 
+        current_all_years = (
+            load_contracts(
+                context=context,
+                con=con,
+                table_name=CURRENT_TABLE,
+                target_year=None,
+            )
+        )
+
+        current_other_year_contracts = (
+            current_all_years
+            - current_contracts
+        )
+
         normalized_contracts: set[str] = (
             set()
         )
@@ -684,6 +708,9 @@ def main() -> int:
         folder=folder,
         current_contracts=(
             current_contracts
+        ),
+        current_other_year_contracts=(
+            current_other_year_contracts
         ),
         normalized_contracts=(
             normalized_contracts
