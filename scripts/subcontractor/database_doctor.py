@@ -608,6 +608,451 @@ def check_legacy_provenance(
 
 
 
+
+PROMOTION_IDENTITY_OVERLAY_OBJECT = (
+    "bid_tab_subcontractor_"
+    "disclosure_2025_alt_identity_overlay_v1"
+)
+
+PROMOTION_PROMOTED_OBJECT = (
+    "bid_tab_subcontractor_"
+    "disclosure_2025_alt_promoted_v1"
+)
+
+PROMOTION_AUDIT_OBJECT = (
+    "bid_tab_subcontractor_"
+    "alt_promotion_audit_2025_v1"
+)
+
+
+def object_columns(
+    con: duckdb.DuckDBPyConnection,
+    object_name: str,
+) -> set[str]:
+    return set(
+        table_columns(
+            con,
+            object_name,
+        )
+    )
+
+
+def object_row_count(
+    con: duckdb.DuckDBPyConnection,
+    object_name: str,
+) -> int:
+    return int(
+        con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {quote_identifier(object_name)}
+            """
+        ).fetchone()[0]
+    )
+
+
+def check_promotion_reconciliation(
+    con: duckdb.DuckDBPyConnection,
+) -> DatabaseCheck:
+    available = {
+        table_name
+        for table_name, _ in main_schema_objects(
+            con
+        )
+    }
+
+    required_objects = (
+        PROMOTION_IDENTITY_OVERLAY_OBJECT,
+        PROMOTION_PROMOTED_OBJECT,
+        PROMOTION_AUDIT_OBJECT,
+    )
+
+    missing_objects = [
+        name
+        for name in required_objects
+        if name not in available
+    ]
+
+    if missing_objects:
+        return DatabaseCheck(
+            name="PROMOTION_RECONCILIATION",
+            status=CheckStatus.FAIL,
+            summary=(
+                f"{len(missing_objects):,} required promotion "
+                "object(s) are missing."
+            ),
+            details=tuple(
+                missing_objects
+            ),
+        )
+
+    overlay_columns = object_columns(
+        con,
+        PROMOTION_IDENTITY_OVERLAY_OBJECT,
+    )
+
+    promoted_columns = object_columns(
+        con,
+        PROMOTION_PROMOTED_OBJECT,
+    )
+
+    audit_columns = object_columns(
+        con,
+        PROMOTION_AUDIT_OBJECT,
+    )
+
+    overlay_rows = object_row_count(
+        con,
+        PROMOTION_IDENTITY_OVERLAY_OBJECT,
+    )
+
+    promoted_rows = object_row_count(
+        con,
+        PROMOTION_PROMOTED_OBJECT,
+    )
+
+    failures: list[str] = []
+    warnings: list[str] = []
+    details: list[str] = [
+        f"Identity overlay rows: {overlay_rows:,}",
+        f"Promoted rows: {promoted_rows:,}",
+    ]
+
+    if promoted_rows > overlay_rows:
+        failures.append(
+            "Promoted rows exceed identity-overlay rows: "
+            f"{promoted_rows:,} > {overlay_rows:,}"
+        )
+
+    elif promoted_rows < overlay_rows:
+        warnings.append(
+            "Identity-overlay rows exceed promoted rows by "
+            f"{overlay_rows - promoted_rows:,}."
+        )
+
+    else:
+        details.append(
+            "Identity overlay and promoted row counts reconcile."
+        )
+
+    if "promotion_audit_status" in audit_columns:
+        failed_audit_rows = int(
+            con.execute(
+                f"""
+                SELECT COUNT(*)
+
+                FROM {quote_identifier(PROMOTION_AUDIT_OBJECT)}
+
+                WHERE promotion_audit_status IS NULL
+                   OR UPPER(
+                        TRIM(
+                            CAST(
+                                promotion_audit_status
+                                AS VARCHAR
+                            )
+                        )
+                   ) <> 'PASSED'
+                """
+            ).fetchone()[0]
+        )
+
+        if failed_audit_rows:
+            failures.append(
+                f"{failed_audit_rows:,} promotion audit row(s) "
+                "are not marked PASSED."
+            )
+        else:
+            details.append(
+                "All promotion audit rows are marked PASSED."
+            )
+    else:
+        warnings.append(
+            "promotion_audit_status is not available "
+            "in the promotion audit object."
+        )
+
+    if "duplicate_disclosure_ids" in audit_columns:
+        duplicate_audit_ids = int(
+            con.execute(
+                f"""
+                SELECT COALESCE(
+                    SUM(
+                        CAST(
+                            duplicate_disclosure_ids
+                            AS BIGINT
+                        )
+                    ),
+                    0
+                )
+
+                FROM {quote_identifier(PROMOTION_AUDIT_OBJECT)}
+                """
+            ).fetchone()[0]
+        )
+
+        if duplicate_audit_ids:
+            failures.append(
+                f"Promotion audit reports "
+                f"{duplicate_audit_ids:,} duplicate "
+                "disclosure ID(s)."
+            )
+        else:
+            details.append(
+                "Promotion audit reports no duplicate "
+                "disclosure IDs."
+            )
+
+    disclosure_id_candidates = (
+        "disclosure_id",
+        "subcontractor_disclosure_id",
+        "promoted_disclosure_id",
+    )
+
+    promoted_disclosure_id = next(
+        (
+            candidate
+            for candidate in disclosure_id_candidates
+            if candidate in promoted_columns
+        ),
+        None,
+    )
+
+    if promoted_disclosure_id is not None:
+        duplicate_promoted_ids = int(
+            con.execute(
+                f"""
+                SELECT COUNT(*)
+
+                FROM (
+                    SELECT
+                        {quote_identifier(promoted_disclosure_id)}
+
+                    FROM {
+                        quote_identifier(
+                            PROMOTION_PROMOTED_OBJECT
+                        )
+                    }
+
+                    WHERE {
+                        quote_identifier(
+                            promoted_disclosure_id
+                        )
+                    } IS NOT NULL
+
+                    GROUP BY
+                        {
+                            quote_identifier(
+                                promoted_disclosure_id
+                            )
+                        }
+
+                    HAVING COUNT(*) > 1
+                )
+                """
+            ).fetchone()[0]
+        )
+
+        if duplicate_promoted_ids:
+            failures.append(
+                f"{duplicate_promoted_ids:,} duplicated "
+                f"{promoted_disclosure_id} value(s) exist "
+                "in promoted disclosures."
+            )
+        else:
+            details.append(
+                f"No duplicate {promoted_disclosure_id} "
+                "values exist in promoted disclosures."
+            )
+    else:
+        warnings.append(
+            "No recognized disclosure-ID column exists "
+            "in the promoted disclosure object."
+        )
+
+    if "disclosure_rows" in audit_columns:
+        audited_disclosure_rows = int(
+            con.execute(
+                f"""
+                SELECT COALESCE(
+                    SUM(
+                        CAST(
+                            disclosure_rows
+                            AS BIGINT
+                        )
+                    ),
+                    0
+                )
+
+                FROM {quote_identifier(PROMOTION_AUDIT_OBJECT)}
+                """
+            ).fetchone()[0]
+        )
+
+        details.append(
+            "Promotion audit disclosure rows: "
+            f"{audited_disclosure_rows:,}"
+        )
+
+        if audited_disclosure_rows != promoted_rows:
+            failures.append(
+                "Promotion audit disclosure total does not "
+                "match promoted row count: "
+                f"{audited_disclosure_rows:,} != "
+                f"{promoted_rows:,}"
+            )
+    else:
+        warnings.append(
+            "disclosure_rows is not available in the "
+            "promotion audit object."
+        )
+
+    common_id = next(
+        (
+            candidate
+            for candidate in disclosure_id_candidates
+            if (
+                candidate in overlay_columns
+                and candidate in promoted_columns
+            )
+        ),
+        None,
+    )
+
+    if common_id is not None:
+        missing_from_promoted = int(
+            con.execute(
+                f"""
+                SELECT COUNT(*)
+
+                FROM (
+                    SELECT DISTINCT
+                        {quote_identifier(common_id)}
+                    FROM {
+                        quote_identifier(
+                            PROMOTION_IDENTITY_OVERLAY_OBJECT
+                        )
+                    }
+                    WHERE {quote_identifier(common_id)}
+                        IS NOT NULL
+
+                    EXCEPT
+
+                    SELECT DISTINCT
+                        {quote_identifier(common_id)}
+                    FROM {
+                        quote_identifier(
+                            PROMOTION_PROMOTED_OBJECT
+                        )
+                    }
+                    WHERE {quote_identifier(common_id)}
+                        IS NOT NULL
+                )
+                """
+            ).fetchone()[0]
+        )
+
+        unexpected_promoted = int(
+            con.execute(
+                f"""
+                SELECT COUNT(*)
+
+                FROM (
+                    SELECT DISTINCT
+                        {quote_identifier(common_id)}
+                    FROM {
+                        quote_identifier(
+                            PROMOTION_PROMOTED_OBJECT
+                        )
+                    }
+                    WHERE {quote_identifier(common_id)}
+                        IS NOT NULL
+
+                    EXCEPT
+
+                    SELECT DISTINCT
+                        {quote_identifier(common_id)}
+                    FROM {
+                        quote_identifier(
+                            PROMOTION_IDENTITY_OVERLAY_OBJECT
+                        )
+                    }
+                    WHERE {quote_identifier(common_id)}
+                        IS NOT NULL
+                )
+                """
+            ).fetchone()[0]
+        )
+
+        if unexpected_promoted:
+            failures.append(
+                f"{unexpected_promoted:,} promoted "
+                f"{common_id} value(s) do not exist in "
+                "the identity overlay."
+            )
+
+        if missing_from_promoted:
+            warnings.append(
+                f"{missing_from_promoted:,} identity-overlay "
+                f"{common_id} value(s) were not promoted."
+            )
+
+        if (
+            not missing_from_promoted
+            and not unexpected_promoted
+        ):
+            details.append(
+                f"Identity overlay and promoted {common_id} "
+                "sets reconcile."
+            )
+    else:
+        warnings.append(
+            "No shared recognized disclosure-ID column "
+            "exists between identity overlay and promoted data."
+        )
+
+    if failures:
+        return DatabaseCheck(
+            name="PROMOTION_RECONCILIATION",
+            status=CheckStatus.FAIL,
+            summary=(
+                "Promotion-stage reconciliation found "
+                f"{len(failures):,} failure(s)."
+            ),
+            details=tuple(
+                failures
+                + warnings
+                + details
+            ),
+        )
+
+    if warnings:
+        return DatabaseCheck(
+            name="PROMOTION_RECONCILIATION",
+            status=CheckStatus.WARN,
+            summary=(
+                "Promotion-stage reconciliation completed "
+                f"with {len(warnings):,} warning(s)."
+            ),
+            details=tuple(
+                warnings
+                + details
+            ),
+        )
+
+    return DatabaseCheck(
+        name="PROMOTION_RECONCILIATION",
+        status=CheckStatus.PASS,
+        summary=(
+            "Promotion-stage row counts, audit results, "
+            "and disclosure identifiers reconcile."
+        ),
+        details=tuple(
+            details
+        ),
+    )
+
+
+
 def run_database_doctor(
     context: FrameworkContext | None = None,
 ) -> DatabaseDoctorReport:
@@ -636,6 +1081,9 @@ def run_database_doctor(
                 con
             ),
             check_legacy_provenance(
+                con
+            ),
+            check_promotion_reconciliation(
                 con
             ),
             check_required_production_tables(
